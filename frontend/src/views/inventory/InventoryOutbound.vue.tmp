@@ -1,0 +1,148 @@
+<template>
+  <div class="inventory-outbound">
+    <!-- ... 其他模板内容 ... -->
+  </div>
+</template>
+
+<script>
+import { ref, reactive, onMounted, computed } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Search, Plus, ArrowDown, Download, Connection } from '@element-plus/icons-vue'
+import api from '@/services/api'
+import { useAuthStore } from '@/stores/auth'
+
+export default {
+  name: 'InventoryOutbound',
+  components: {
+    Search,
+    Plus,
+    ArrowDown,
+    Download,
+    Connection,
+  },
+  setup() {
+    const authStore = useAuthStore()
+    
+    // 选择生产计划
+    const handleSelectPlan = async (row) => {
+      try {
+        const res = await api.get(`/production/plans/${row.id}/materials`)
+        const planMaterials = res.data
+
+        // 将生产计划的物料添加到出库单
+        for (const material of planMaterials) {
+          const existingIndex = outboundForm.items.findIndex(item => item.material_id === material.material_id)
+          
+          if (existingIndex !== -1) {
+            // 如果物料已存在，增加数量
+            outboundForm.items[existingIndex].quantity += material.required_quantity
+          } else {
+            // 如果物料不存在，添加新的物料项
+            outboundForm.items.push({
+              material_id: material.material_id,
+              material_code: material.material_code,
+              material_name: material.material_name,
+              specification: material.specification,
+              unit_id: material.unit_id,
+              unit_name: material.unit_name,
+              stock_quantity: material.stock_quantity || 0,
+              quantity: material.required_quantity
+            })
+          }
+        }
+
+        // 关闭对话框
+        planDialogVisible.value = false
+        ElMessage.success('已添加生产计划物料')
+      } catch (error) {
+        console.error('获取生产计划物料失败:', error)
+        ElMessage.error('获取生产计划物料失败')
+      }
+    }
+
+    // 列表数据
+    const outboundList = ref([])
+    const loading = ref(false)
+    const currentPage = ref(1)
+    const pageSize = ref(20)
+    const total = ref(0)
+    const searchKeyword = ref('')
+    const locationFilter = ref('')
+    const statusFilter = ref('')
+    const searchForm = reactive({})
+    const tableHeight = ref('calc(100vh - 280px)')
+    const warehouseOptions = ref([])
+
+    // 获取仓库列表
+    const fetchLocations = async () => {
+      try {
+        const res = await api.get('/inventory/locations')
+        warehouseOptions.value = res.data.map(l => ({
+          id: l.id,
+          name: l.name
+        }))
+      } catch (error) {
+        console.error('获取仓库列表失败:', error)
+        ElMessage.error('获取仓库列表失败')
+      }
+    }
+    
+    // 对话框控制
+    const dialogVisible = ref(false)
+    const dialogType = ref('add') // add, edit, view
+    const outboundFormRef = ref(null)
+    const submitting = ref(false)
+    
+    // 表单数据
+    const outboundForm = reactive({
+      id: null,
+      outbound_no: '',
+      outbound_date: new Date(),
+      location_id: '',
+      location_name: '',
+      status: 'draft',
+      operator: authStore.user?.username || 'system',  // 提供默认值
+      remark: '',
+      items: []
+    })
+    
+    // 表单验证规则
+    const outboundRules = {
+      outbound_date: [
+        { required: true, message: '请选择出库日期', trigger: 'change' }
+      ],
+      location_id: [
+        { required: true, message: '请选择仓库', trigger: 'change' }
+      ],
+      operator: [
+        { required: true, message: '请填写操作人', trigger: 'blur' }
+      ]
+    }
+    
+    // 物料选择相关
+    const materialDialogVisible = ref(false)
+    const materialSearchKeyword = ref('')
+    const materialList = ref([])
+    const loadingMaterials = ref(false)
+    const selectedLocationId = ref('')
+
+    // 生产计划选择相关
+    const planDialogVisible = ref(false)
+    const planSearchKeyword = ref('')
+    const planList = ref([])
+    const loadingPlans = ref(false)
+
+    // ... 其他函数和变量定义 ...
+
+    return {
+      // ... 返回需要的变量和函数 ...
+      handleSelectPlan,
+      // ... 其他返回值 ...
+    }
+  }
+}
+</script>
+
+<style>
+/* ... 样式定义 ... */
+</style>
