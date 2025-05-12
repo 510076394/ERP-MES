@@ -1,0 +1,668 @@
+﻿const db = require('../config/db');
+const financeModel = require('./finance');
+
+/**
+ * 搴斾粯璐︽妯″潡鏁版嵁搴撴搷浣? */
+const apModel = {
+  /**
+   * 鍒涘缓搴斾粯璐︽鍙戠エ
+   */
+  createInvoice: async (invoiceData) => {
+    try {
+      console.log('鍒涘缓鍙戠エ鏁版嵁:', invoiceData);
+
+      // 璁＄畻浣欓 - 纭繚浣跨敤姝ｇ‘鐨勫瓧娈靛悕
+      const balanceAmount = invoiceData.total_amount;
+
+      // 鎻掑叆搴斾粯璐︽鍙戠エ
+      const [result] = await db.pool.execute(
+        `INSERT INTO ap_invoices 
+        (invoice_number, supplier_id, invoice_date, due_date, 
+         total_amount, paid_amount, balance_amount, 
+         currency_code, exchange_rate, status, terms, notes) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          invoiceData.invoice_number,
+          invoiceData.supplier_id,
+          invoiceData.invoice_date,
+          invoiceData.due_date,
+          invoiceData.total_amount,
+          0, // 鍒濆宸蹭粯閲戦涓?
+          balanceAmount,
+          invoiceData.currency_code || 'CNY',
+          invoiceData.exchange_rate || 1,
+          invoiceData.status || '鑽夌',
+          invoiceData.terms || null,
+          invoiceData.notes || null
+        ]
+      );
+
+      const invoiceId = result.insertId;
+      console.log('鍙戠エ鍒涘缓鎴愬姛锛孖D:', invoiceId);
+
+      // 濡傛灉鏈夊彂绁ㄦ槑缁嗛」锛屼繚瀛樻槑缁嗛」
+      if (invoiceData.items && Array.isArray(invoiceData.items) && invoiceData.items.length > 0) {
+        console.log('澶勭悊鍙戠エ鏄庣粏椤?', invoiceData.items);
+        
+        for (const item of invoiceData.items) {
+          await db.pool.execute(
+            `INSERT INTO ap_invoice_items
+            (invoice_id, material_id, description, quantity, unit_price, amount)
+            VALUES (?, ?, ?, ?, ?, ?)`,
+            [
+              invoiceId,
+              item.materialId,
+              item.description || '',
+              item.quantity,
+              item.unitPrice,
+              item.amount
+            ]
+          );
+        }
+        console.log('鍙戠エ鏄庣粏椤逛繚瀛樻垚鍔?);
+      }
+
+      return invoiceId;
+    } catch (error) {
+      console.error('鍒涘缓搴斾粯璐︽鍙戠エ澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鎸塈D鑾峰彇搴斾粯璐︽鍙戠エ
+   */
+  getInvoiceById: async (id) => {
+    try {
+      // 鏌ヨ鍙戠エ涓绘暟鎹?      const [invoices] = await db.pool.execute(
+        `SELECT a.*, 
+                DATE_FORMAT(a.invoice_date, '%Y-%m-%d') as invoice_date, 
+                DATE_FORMAT(a.due_date, '%Y-%m-%d') as due_date, 
+                DATE_FORMAT(a.created_at, '%Y-%m-%d') as created_at,
+                s.name as supplier_name
+         FROM ap_invoices a
+         LEFT JOIN suppliers s ON a.supplier_id = s.id
+         WHERE a.id = ?`,
+        [id]
+      );
+      
+      if (invoices.length === 0) {
+        return null;
+      }
+      
+      const invoice = invoices[0];
+      
+      // 鏌ヨ鍙戠エ鏄庣粏椤?      const [items] = await db.pool.execute(
+        `SELECT i.id, i.material_id as materialId, i.description, 
+                i.quantity, i.unit_price as unitPrice, i.amount,
+                m.name as materialName
+         FROM ap_invoice_items i
+         LEFT JOIN materials m ON i.material_id = m.id
+         WHERE i.invoice_id = ?
+         ORDER BY i.id ASC`,
+        [id]
+      );
+      
+      // 娣诲姞鏄庣粏椤瑰埌鍙戠エ鏁版嵁
+      invoice.items = items;
+      
+      // 鏍煎紡鍖栨暟鎹互绗﹀悎鍓嶇鏈熸湜
+      const result = {
+        id: invoice.id,
+        invoiceNumber: invoice.invoice_number,
+        supplierId: invoice.supplier_id,
+        supplierName: invoice.supplier_name,
+        invoiceDate: invoice.invoice_date,
+        dueDate: invoice.due_date,
+        amount: invoice.total_amount,
+        paidAmount: invoice.paid_amount,
+        balance: invoice.balance_amount,
+        status: invoice.status,
+        notes: invoice.notes,
+        items: items,
+        createdAt: invoice.created_at
+      };
+      
+      return result;
+    } catch (error) {
+      console.error('鑾峰彇搴斾粯璐︽鍙戠エ澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鑾峰彇搴斾粯璐︽鍙戠エ鍒楄〃
+   */
+  getInvoices: async (filters = {}, page = 1, pageSize = 20) => {
+    try {
+      console.log('寮€濮嬭幏鍙栧彂绁ㄥ垪琛紝绛涢€夋潯浠?', JSON.stringify(filters));
+      console.log('鍒嗛〉鍙傛暟:', { page, pageSize });
+      
+      // 纭繚page鍜宲ageSize鏄暟瀛?      const numPage = Number(page) || 1;
+      const numPageSize = Number(pageSize) || 20;
+      
+      // 鍏堟鏌p_invoices琛ㄦ槸鍚﹀瓨鍦?      try {
+        const [testQuery] = await db.pool.execute('SELECT COUNT(*) as count FROM ap_invoices');
+        console.log('ap_invoices琛ㄦ鏌ョ粨鏋?', testQuery[0].count);
+      } catch (err) {
+        console.error('ap_invoices琛ㄦ鏌ュけ璐?', err.message);
+        throw new Error(`ap_invoices琛ㄤ笉瀛樺湪鎴栨棤娉曡闂? ${err.message}`);
+      }
+      
+      // 妫€鏌uppliers琛ㄦ槸鍚﹀瓨鍦?      let suppliersTableExists = false; // 榛樿璁剧疆涓篺alse
+      try {
+        await db.pool.execute('SELECT 1 FROM suppliers LIMIT 1');
+        suppliersTableExists = true; // 鍙湁鍦ㄦ煡璇㈡垚鍔熸椂鎵嶈缃负true
+      } catch (err) {
+        console.warn('suppliers琛ㄦ鏌ュけ璐ワ紝灏嗕笉浣跨敤JOIN鏌ヨ:', err.message);
+        // 淇濇寔suppliersTableExists涓篺alse
+      }
+      
+      // 鏍规嵁suppliers琛ㄦ槸鍚﹀瓨鍦ㄥ喅瀹氭煡璇㈡柟寮?      let whereClause = "WHERE 1=1";
+      const params = [];
+
+      // 娣诲姞杩囨护鏉′欢
+      if (filters.invoice_number) {
+        whereClause += ' AND invoice_number LIKE ?';
+        params.push(`%${filters.invoice_number}%`);
+      }
+      
+      if (filters.supplier_id) {
+        whereClause += ' AND supplier_id = ?';
+        params.push(filters.supplier_id);
+      }
+      
+      // 渚涘簲鍟嗗悕绉拌繃婊ゆ潯浠讹紝濡傛灉suppliers琛ㄤ笉瀛樺湪鍒欒烦杩?      if (suppliersTableExists && filters.supplier_name) {
+        whereClause += ' AND s.name LIKE ?';  // 浣跨敤name鑰屼笉鏄痵upplier_name
+        params.push(`%${filters.supplier_name}%`);
+      }
+      
+      if (filters.start_date && filters.end_date) {
+        whereClause += ' AND invoice_date BETWEEN ? AND ?';
+        params.push(filters.start_date, filters.end_date);
+      } else if (filters.start_date) {
+        whereClause += ' AND invoice_date >= ?';
+        params.push(filters.start_date);
+      } else if (filters.end_date) {
+        whereClause += ' AND invoice_date <= ?';
+        params.push(filters.end_date);
+      }
+      
+      if (filters.status) {
+        whereClause += ' AND status = ?';
+        params.push(filters.status);
+      }
+
+      console.log('鏋勫缓鐨刉HERE瀛愬彞:', whereClause);
+      console.log('鏌ヨ鍙傛暟:', params);
+
+      // 鏌ヨ鎬昏褰曟暟 - 绠€鍖栨煡璇互閬垮厤JOIN閿欒
+      try {
+        let countQuery;
+        if (suppliersTableExists && filters.supplier_name) {
+          // 濡傛灉闇€瑕佹寜渚涘簲鍟嗗悕绉拌繃婊わ紝鍒欏繀椤讳娇鐢↗OIN鏌ヨ
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM ap_invoices a
+            LEFT JOIN suppliers s ON a.supplier_id = s.id
+            ${whereClause}`;
+        } else {
+          // 鍚﹀垯鐩存帴鏌ヨap_invoices琛?          countQuery = `
+            SELECT COUNT(*) as total
+            FROM ap_invoices
+            ${whereClause.replace('s.name', 'supplier_id')}`;  // 鏇挎崲name
+        }
+        
+        console.log('璁℃暟鏌ヨ:', countQuery);
+        
+        const [countResult] = await db.pool.execute(countQuery, params);
+        const total = countResult[0].total;
+        console.log('鎬昏褰曟暟:', total);
+        
+        // 濡傛灉娌℃湁璁板綍锛岀洿鎺ヨ繑鍥炵┖缁撴灉
+        if (total === 0) {
+          console.log('娌℃湁鎵惧埌璁板綍锛岃繑鍥炵┖缁撴灉');
+          return {
+            data: [],
+            total: 0,
+            page: numPage,
+            pageSize: numPageSize
+          };
+        }
+        
+        // 鍒嗛〉鍙傛暟澶勭悊
+        const offset = (numPage - 1) * numPageSize;
+        
+        // 鎵ц鏌ヨ甯﹀垎椤?        let dataQuery;
+        let dataParams = [...params]; // 鍒涘缓鍙傛暟鐨勫壇鏈?        
+        if (suppliersTableExists) {
+          // 濡傛灉suppliers琛ㄥ瓨鍦紝浣跨敤JOIN鏌ヨ鑾峰彇渚涘簲鍟嗗悕绉?          dataQuery = `
+            SELECT a.id, a.invoice_number as invoiceNumber, a.supplier_id as supplierId, 
+                  s.name as supplierName, 
+                  DATE_FORMAT(a.invoice_date, '%Y-%m-%d') as invoiceDate, 
+                  DATE_FORMAT(a.due_date, '%Y-%m-%d') as dueDate, 
+                  a.total_amount as amount, 
+                  a.paid_amount as paidAmount, a.balance_amount as balance,
+                  a.status, DATE_FORMAT(a.created_at, '%Y-%m-%d') as createdAt
+            FROM ap_invoices a
+            LEFT JOIN suppliers s ON a.supplier_id = s.id
+            ${whereClause}
+            ORDER BY a.invoice_date DESC, a.id DESC 
+            LIMIT ${numPageSize} OFFSET ${offset}`;
+        } else {
+          // 濡傛灉suppliers琛ㄤ笉瀛樺湪锛屽垯浠呮煡璇p_invoices琛?          dataQuery = `
+            SELECT id, invoice_number as invoiceNumber, supplier_id as supplierId, 
+                  NULL as supplierName, 
+                  DATE_FORMAT(invoice_date, '%Y-%m-%d') as invoiceDate, 
+                  DATE_FORMAT(due_date, '%Y-%m-%d') as dueDate, 
+                  total_amount as amount, 
+                  paid_amount as paidAmount, balance_amount as balance,
+                  status, DATE_FORMAT(created_at, '%Y-%m-%d') as createdAt
+            FROM ap_invoices
+            ${whereClause.replace('s.name', 'supplier_id')}  
+            ORDER BY invoice_date DESC, id DESC 
+            LIMIT ${numPageSize} OFFSET ${offset}`;
+        }
+        
+        console.log('鏁版嵁鏌ヨ:', dataQuery);
+        console.log('鏌ヨ鍙傛暟 (甯﹀垎椤?:', dataParams);
+        
+        const [invoices] = await db.pool.execute(dataQuery, dataParams);
+        console.log(`鏌ヨ鍒?${invoices.length} 鏉¤褰昤);
+        
+        // 杩斿洖缁撴灉
+        return {
+          data: invoices,
+          total,
+          page: numPage,
+          pageSize: numPageSize
+        };
+      } catch (err) {
+        console.error('鏌ヨ鎵ц澶辫触:', err);
+        throw new Error(`鏌ヨ鎵ц澶辫触: ${err.message}`);
+      }
+    } catch (error) {
+      console.error('鑾峰彇搴斾粯璐︽鍙戠エ鍒楄〃澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鏇存柊搴斾粯璐︽鍙戠エ鐘舵€?   */
+  updateInvoiceStatus: async (id, status) => {
+    try {
+      const [result] = await db.pool.execute(
+        'UPDATE ap_invoices SET status = ? WHERE id = ?',
+        [status, id]
+      );
+      return result.affectedRows > 0;
+    } catch (error) {
+      console.error('鏇存柊搴斾粯璐︽鍙戠エ鐘舵€佸け璐?', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鍒涘缓浠樻璁板綍
+   */
+  createPayment: async (paymentData, paymentItems) => {
+    const connection = await db.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      // 鎻掑叆浠樻璁板綍
+      const [result] = await connection.execute(
+        `INSERT INTO ap_payments 
+        (payment_number, supplier_id, payment_date, total_amount, 
+         payment_method, reference_number, bank_account_id, notes) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          paymentData.payment_number,
+          paymentData.supplier_id,
+          paymentData.payment_date,
+          paymentData.total_amount,
+          paymentData.payment_method,
+          paymentData.reference_number || null,
+          paymentData.bank_account_id || null,
+          paymentData.notes || null
+        ]
+      );
+
+      const paymentId = result.insertId;
+
+      // 鎻掑叆浠樻鏄庣粏骞舵洿鏂板彂绁ㄧ姸鎬?      let totalPaid = 0;
+      for (const item of paymentItems) {
+        // 鎻掑叆浠樻鏄庣粏
+        await connection.execute(
+          'INSERT INTO ap_payment_items (payment_id, invoice_id, amount, discount_amount) VALUES (?, ?, ?, ?)',
+          [
+            paymentId,
+            item.invoice_id,
+            item.amount,
+            item.discount_amount || 0
+          ]
+        );
+
+        // 鑾峰彇鍙戠エ褰撳墠淇℃伅
+        const [invoices] = await connection.execute(
+          'SELECT * FROM ap_invoices WHERE id = ?',
+          [item.invoice_id]
+        );
+        
+        if (invoices.length === 0) {
+          throw new Error(`鍙戠エID ${item.invoice_id} 涓嶅瓨鍦╜);
+        }
+        
+        const invoice = invoices[0];
+        
+        // 璁＄畻鏂扮殑宸蹭粯閲戦鍜屼綑棰?        const newPaidAmount = parseFloat(invoice.paid_amount) + parseFloat(item.amount);
+        const newBalanceAmount = parseFloat(invoice.total_amount) - newPaidAmount;
+        
+        // 纭畾鏂扮殑鐘舵€?        let newStatus;
+        if (newBalanceAmount <= 0) {
+          newStatus = '宸蹭粯娆?;
+        } else if (newPaidAmount > 0) {
+          newStatus = '閮ㄥ垎浠樻';
+        } else {
+          newStatus = invoice.status;
+        }
+        
+        // 鏇存柊鍙戠エ
+        await connection.execute(
+          'UPDATE ap_invoices SET paid_amount = ?, balance_amount = ?, status = ? WHERE id = ?',
+          [newPaidAmount, newBalanceAmount, newStatus, item.invoice_id]
+        );
+        
+        totalPaid += parseFloat(item.amount);
+      }
+
+      // 濡傛灉鎻愪緵浜嗕細璁″垎褰曚俊鎭紝鍒涘缓浠樻浼氳鍒嗗綍
+      if (paymentData.gl_entry) {
+        const entryData = {
+          entry_number: paymentData.gl_entry.entry_number,
+          entry_date: paymentData.payment_date,
+          posting_date: paymentData.payment_date,
+          document_type: '浠樻鍗?,
+          document_number: paymentData.payment_number,
+          period_id: paymentData.gl_entry.period_id,
+          description: `渚涘簲鍟?${paymentData.supplier_name} 浠樻`,
+          created_by: paymentData.gl_entry.created_by
+        };
+
+        // 浠樻鍒嗗綍鏄庣粏
+        const entryItems = [
+          // 鍊燂細搴斾粯璐︽
+          {
+            account_id: paymentData.gl_entry.payable_account_id,
+            debit_amount: totalPaid,
+            credit_amount: 0,
+            description: `搴斾粯璐︽鍑忓皯 - 浠樻鍗曞彿: ${paymentData.payment_number}`
+          },
+          // 璐凤細閾惰/鐜伴噾
+          {
+            account_id: paymentData.gl_entry.bank_account_id,
+            debit_amount: 0,
+            credit_amount: totalPaid,
+            description: `浠樻 - 浠樻鍗曞彿: ${paymentData.payment_number}`
+          }
+        ];
+
+        // 鍒涘缓浼氳鍒嗗綍
+        await financeModel.createEntry(entryData, entryItems, connection);
+      }
+
+      await connection.commit();
+      return paymentId;
+    } catch (error) {
+      await connection.rollback();
+      console.error('鍒涘缓浠樻璁板綍澶辫触:', error);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  },
+
+  /**
+   * 鑾峰彇浠樻璁板綍
+   */
+  getPaymentById: async (id) => {
+    try {
+      // 鑾峰彇浠樻璁板綍
+      const [payments] = await db.pool.execute(
+        `SELECT p.*, s.supplier_name, b.account_name as bank_account_name
+         FROM ap_payments p
+         LEFT JOIN suppliers s ON p.supplier_id = s.id
+         LEFT JOIN bank_accounts b ON p.bank_account_id = b.id
+         WHERE p.id = ?`,
+        [id]
+      );
+      
+      if (payments.length === 0) return null;
+      
+      const payment = payments[0];
+      
+      // 鑾峰彇浠樻鏄庣粏
+      const [items] = await db.pool.execute(
+        `SELECT pi.*, i.invoice_number
+         FROM ap_payment_items pi
+         LEFT JOIN ap_invoices i ON pi.invoice_id = i.id
+         WHERE pi.payment_id = ?`,
+        [id]
+      );
+      
+      payment.items = items;
+      
+      return payment;
+    } catch (error) {
+      console.error('鑾峰彇浠樻璁板綍澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鑾峰彇浠樻璁板綍鍒楄〃
+   */
+  getPayments: async (filters = {}, page = 1, pageSize = 20) => {
+    try {
+      let query = `
+        SELECT p.*, s.supplier_name
+        FROM ap_payments p
+        LEFT JOIN suppliers s ON p.supplier_id = s.id
+        WHERE 1=1
+      `;
+      const params = [];
+
+      // 娣诲姞杩囨护鏉′欢
+      if (filters.payment_number) {
+        query += ' AND p.payment_number LIKE ?';
+        params.push(`%${filters.payment_number}%`);
+      }
+      
+      if (filters.supplier_id) {
+        query += ' AND p.supplier_id = ?';
+        params.push(filters.supplier_id);
+      }
+      
+      if (filters.start_date && filters.end_date) {
+        query += ' AND p.payment_date BETWEEN ? AND ?';
+        params.push(filters.start_date, filters.end_date);
+      } else if (filters.start_date) {
+        query += ' AND p.payment_date >= ?';
+        params.push(filters.start_date);
+      } else if (filters.end_date) {
+        query += ' AND p.payment_date <= ?';
+        params.push(filters.end_date);
+      }
+      
+      if (filters.payment_method) {
+        query += ' AND p.payment_method = ?';
+        params.push(filters.payment_method);
+      }
+
+      // 娣诲姞鎺掑簭鍜屽垎椤?      query += ' ORDER BY p.payment_date DESC, p.id DESC LIMIT ? OFFSET ?';
+      params.push(pageSize, (page - 1) * pageSize);
+
+      // 鎵ц鏌ヨ
+      const [payments] = await db.pool.execute(query, params);
+      
+      // 鑾峰彇鎬昏褰曟暟
+      let countQuery = 'SELECT COUNT(*) as total FROM ap_payments p WHERE 1=1';
+      const countParams = [...params];
+      countParams.pop(); // 绉婚櫎LIMIT
+      countParams.pop(); // 绉婚櫎OFFSET
+      
+      // 娣诲姞涓庝富鏌ヨ鐩稿悓鐨勮繃婊ゆ潯浠?      if (filters.payment_number) {
+        countQuery += ' AND p.payment_number LIKE ?';
+      }
+      
+      if (filters.supplier_id) {
+        countQuery += ' AND p.supplier_id = ?';
+      }
+      
+      if (filters.start_date && filters.end_date) {
+        countQuery += ' AND p.payment_date BETWEEN ? AND ?';
+      } else if (filters.start_date) {
+        countQuery += ' AND p.payment_date >= ?';
+      } else if (filters.end_date) {
+        countQuery += ' AND p.payment_date <= ?';
+      }
+      
+      if (filters.payment_method) {
+        countQuery += ' AND p.payment_method = ?';
+      }
+      
+      const [countResult] = await db.pool.execute(countQuery, countParams);
+      const total = countResult[0].total;
+      
+      return {
+        payments,
+        pagination: {
+          total,
+          page,
+          pageSize,
+          totalPages: Math.ceil(total / pageSize)
+        }
+      };
+    } catch (error) {
+      console.error('鑾峰彇浠樻璁板綍鍒楄〃澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鑾峰彇渚涘簲鍟嗗簲浠樿处娆炬眹鎬?   */
+  getSupplierPayables: async (supplierId = null) => {
+    try {
+      let query = `
+        SELECT 
+          s.id AS supplier_id,
+          s.supplier_name,
+          COUNT(a.id) AS invoice_count,
+          SUM(a.total_amount) AS total_amount,
+          SUM(a.paid_amount) AS paid_amount,
+          SUM(a.balance_amount) AS balance_amount
+        FROM suppliers s
+        LEFT JOIN ap_invoices a ON s.id = a.supplier_id AND a.status != '宸插彇娑?
+      `;
+      
+      const params = [];
+      
+      if (supplierId) {
+        query += ' WHERE s.id = ?';
+        params.push(supplierId);
+      }
+      
+      query += ' GROUP BY s.id, s.supplier_name ORDER BY balance_amount DESC';
+      
+      const [results] = await db.pool.execute(query, params);
+      return results;
+    } catch (error) {
+      console.error('鑾峰彇渚涘簲鍟嗗簲浠樿处娆炬眹鎬诲け璐?', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鑾峰彇搴斾粯璐︽璐﹂緞鍒嗘瀽
+   */
+  getPayablesAging: async (supplierId = null, asOfDate = null) => {
+    try {
+      // 濡傛灉娌℃湁鎸囧畾鏃ユ湡锛屼娇鐢ㄥ綋鍓嶆棩鏈?      const currentDate = asOfDate || new Date().toISOString().split('T')[0];
+      
+      let query = `
+        SELECT 
+          s.id AS supplier_id,
+          s.supplier_name,
+          SUM(CASE WHEN DATEDIFF(?, a.due_date) <= 0 THEN a.balance_amount ELSE 0 END) AS current_amount,
+          SUM(CASE WHEN DATEDIFF(?, a.due_date) BETWEEN 1 AND 30 THEN a.balance_amount ELSE 0 END) AS '1_30_days',
+          SUM(CASE WHEN DATEDIFF(?, a.due_date) BETWEEN 31 AND 60 THEN a.balance_amount ELSE 0 END) AS '31_60_days',
+          SUM(CASE WHEN DATEDIFF(?, a.due_date) BETWEEN 61 AND 90 THEN a.balance_amount ELSE 0 END) AS '61_90_days',
+          SUM(CASE WHEN DATEDIFF(?, a.due_date) > 90 THEN a.balance_amount ELSE 0 END) AS 'over_90_days',
+          SUM(a.balance_amount) AS total_amount
+        FROM suppliers s
+        LEFT JOIN ap_invoices a ON s.id = a.supplier_id AND a.status != '宸蹭粯娆? AND a.status != '宸插彇娑?
+      `;
+      
+      const params = [currentDate, currentDate, currentDate, currentDate, currentDate];
+      
+      if (supplierId) {
+        query += ' WHERE s.id = ?';
+        params.push(supplierId);
+      }
+      
+      query += ' GROUP BY s.id, s.supplier_name HAVING total_amount > 0 ORDER BY total_amount DESC';
+      
+      const [results] = await db.pool.execute(query, params);
+      return results;
+    } catch (error) {
+      console.error('鑾峰彇搴斾粯璐︽璐﹂緞鍒嗘瀽澶辫触:', error);
+      throw error;
+    }
+  },
+
+  /**
+   * 鑾峰彇鏈粯娓呯殑搴斾粯璐︽鍙戠エ鍒楄〃
+   */
+  getUnpaidInvoices: async () => {
+    try {
+      console.log('鑾峰彇鏈粯娓呭彂绁ㄥ垪琛?);
+      
+      // 鏌ヨ鏈粯娓呯殑鍙戠エ锛堢姸鎬佷负'鑽夌'銆?宸茬‘璁?銆?閮ㄥ垎浠樻'鐨勫彂绁級
+      const [invoices] = await db.pool.execute(
+        `SELECT a.id, a.invoice_number as invoiceNumber, 
+                a.supplier_id as supplierId, s.name as supplierName,
+                DATE_FORMAT(a.invoice_date, '%Y-%m-%d') as invoiceDate, 
+                DATE_FORMAT(a.due_date, '%Y-%m-%d') as dueDate,
+                ROUND(a.total_amount, 2) as amount,
+                ROUND(a.paid_amount, 2) as paidAmount,
+                ROUND(a.balance_amount, 2) as balance,
+                a.status
+         FROM ap_invoices a
+         LEFT JOIN suppliers s ON a.supplier_id = s.id
+         WHERE a.status IN ('鑽夌', '宸茬‘璁?, '閮ㄥ垎浠樻')
+         AND a.balance_amount > 0
+         ORDER BY a.due_date ASC, a.id ASC`
+      );
+      
+      console.log(`鎵惧埌 ${invoices.length} 鏉℃湭浠樻竻鍙戠エ`);
+      
+      // 杞崲閲戦涓烘暟瀛楃被鍨?      const formattedInvoices = invoices.map(invoice => ({
+        ...invoice,
+        amount: parseFloat(invoice.amount),
+        paidAmount: parseFloat(invoice.paidAmount),
+        balance: parseFloat(invoice.balance)
+      }));
+      
+      return formattedInvoices;
+    } catch (error) {
+      console.error('鑾峰彇鏈粯娓呭彂绁ㄥ垪琛ㄥけ璐?', error);
+      throw error;
+    }
+  }
+};
+
+module.exports = apModel; 
+
+  }`n};
+
+module.exports = apModel;
