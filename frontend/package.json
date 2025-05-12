@@ -1,0 +1,31 @@
+{
+  "name": "erp-mes-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "dev:alt": "vite --port 3000 || vite --port 3001 || vite --port 3002",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-svg-core": "^6.7.2",
+    "@fortawesome/free-brands-svg-icons": "^6.7.2",
+    "@fortawesome/vue-fontawesome": "^3.0.8",
+    "ant-design-vue": "^4.0.0",
+    "axios": "^1.6.2",
+    "chart.js": "^4.4.8",
+    "dayjs": "^1.11.10",
+    "echarts": "^5.6.0",
+    "element-plus": "^2.4.2",
+    "pinia": "^2.1.7",
+    "vue": "^3.3.8",
+    "vue-router": "^4.2.5",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^4.5.0",
+    "sass": "^1.69.5",
+    "vite": "^5.0.0"
+  }
+}
